@@ -11,7 +11,9 @@ Most ambient-light setups capture the video signal. movie-glow takes a different
 3. averages **5 zones** around the edge of the picture (left side, top-left, top, top-right, right side),
 4. sends them to a **Hue gradient lightstrip** as 5 colour points, plus brightness from how bright the scene is, with a smooth fade.
 
-Optionally, nearby colour lamps can follow the left or right side of the picture at a lower brightness. When you pause or stop, the lights go to a white of your choice, back to how they were, or stay as they are.
+Optionally, nearby colour lamps can follow the left or right side of the picture at a lower brightness, with an
+**ambient light sensitivity** from 100 (same as the strip) down to 1 (the average colour of roughly the last 30 minutes),
+so the room can carry the film's overall mood while the strip handles the action. When you pause or stop, the lights go to a white of your choice, back to how they were, or stay as they are.
 
 A 1080p frame takes ~0.15 s and a 4K HDR frame ~0.5 s on a small Intel NUC.
 
@@ -78,10 +80,26 @@ With `[home_assistant]` configured, you get:
 - **`switch`**: an `input_boolean` that turns syncing on/off (e.g. from a "movie mode" script or a dashboard button). Without it, movie-glow syncs whenever the chosen Plex player is playing.
 - **`media_player`**: a more precise playback position from your player (e.g. an Apple TV), which Plex only updates every few seconds.
 - **`lamps_yield_on_pause_to`**: while paused, leave the lamps to another automation (e.g. a "pause lights" scene) when this entity is on.
+- **`ambient_sensitivity_entity`**: an `input_number` (1–100) slider for ambient light sensitivity that you can change mid-movie.
 
 ## Tuning
 
-All in `config.toml` under `[sync]`: `brightness_min` / `brightness_max`, `saturation`, `interval`, `fade_ms`, `lead`. Lamps take a per-lamp `factor`.
+All in `config.toml` under `[sync]`: `brightness_min` / `brightness_max`, `saturation`, `interval`, `fade_ms`, `lead`, `ambient_sensitivity`. Lamps take a per-lamp `factor` and `sensitivity`.
+
+**Ambient light sensitivity** (lamps only) is a time-weighted average of each lamp's side of the picture.
+It's logarithmic so the whole range is useful:
+
+| sensitivity | lamps settle over |
+|---|---|
+| 100 | instantly (same as the strip) |
+| 90 | ~1 s |
+| 75 | ~6 s |
+| 50 | ~45 s |
+| 25 | ~5 min |
+| 10 | ~15 min |
+| 1 | ~30 min (the movie's overall mood) |
+
+Brightness is averaged the same way. A new movie starts the average fresh.
 
 ## License
 

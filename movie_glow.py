@@ -17,7 +17,7 @@ Usage:
   movie_glow.py --lights             list Hue lights (gradient strips marked)
   movie_glow.py --once FILE SECONDS [--hdr]   print the colours for one frame, lights untouched
 """
-import colorsys, datetime, json, os, signal, ssl, subprocess, sys, time, tomllib, urllib.request
+import colorsys, datetime, json, math, os, signal, ssl, subprocess, sys, time, tomllib, urllib.request
 
 W, H = 32, 18
 _SSL = ssl.create_default_context()
@@ -45,9 +45,10 @@ DEFAULTS = {
     "hue": {"host": "", "strip": "", "reverse": False, "lamps": []},
     "sync": {"interval": 1.5, "lead": 1.0, "fade_ms": 1200, "lamp_fade_ms": 2500,
              "brightness_min": 25.0, "brightness_max": 80.0, "saturation": 1.35,
-             "lamp_factor": 0.35},
+             "lamp_factor": 0.35, "ambient_sensitivity": 100},
     "after": {"mode": "fixed", "brightness": 75, "kelvin": 4000},
-    "home_assistant": {"url": "", "switch": "", "media_player": "", "lamps_yield_on_pause_to": ""},
+    "home_assistant": {"url": "", "switch": "", "media_player": "", "lamps_yield_on_pause_to": "",
+                       "ambient_sensitivity_entity": ""},
 }
 
 
@@ -176,6 +177,12 @@ class HomeAssistant:
         pos = float(a["media_position"]) + (time.time() - upd if s["state"] == "playing" else 0)
         return s["state"], pos
 
+    def number(self, eid):
+        try:
+            return float(self.state(eid)["state"])
+        except (ValueError, TypeError):
+            return None
+
     def lamps_yield(self):
         e = self.cfg["lamps_yield_on_pause_to"]
         return bool(e) and self.state(e)["state"] == "on"
@@ -232,10 +239,58 @@ def analyse(img, sync, reverse):
     if reverse:
         pts.reverse()
         sides["left"], sides["right"] = sides["right"], sides["left"]
-    r, g, b = zone_avg(img, 0, W, 0, H)
+    raw = {"left": zone_avg(img, 0, 11, 0, H), "right": zone_avg(img, W - 11, W, 0, H),
+           "center": zone_avg(img, 0, W, 0, H)}
+    if reverse:
+        raw["left"], raw["right"] = raw["right"], raw["left"]
+    r, g, b = raw["center"]
     luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
     lo, hi = sync["brightness_min"], sync["brightness_max"]
-    return pts, lo + (hi - lo) * min(1.0, (luma / 0.25) ** 0.5), sides
+    return pts, lo + (hi - lo) * min(1.0, (luma / 0.25) ** 0.5), sides, raw
+
+
+# ---------------------------------------------------------------- ambient light sensitivity
+
+AMBIENT_MAX_S = 1800    # sensitivity 1 ≈ average colour of the last 30 minutes
+
+
+def ambient_tau(sensitivity):
+    """Sensitivity 1–100 → smoothing time constant in seconds (100 → 0 = follow the picture;
+    75 ≈ 7 s, 50 ≈ 40 s, 25 ≈ 4 min, 1 ≈ 30 min). Logarithmic so the whole range is useful."""
+    s = max(1.0, min(100.0, float(sensitivity)))
+    return (AMBIENT_MAX_S + 1) ** ((100 - s) / 99) - 1
+
+
+class Ambient:
+    """Per-lamp time-weighted average of colour (linear RGB) and brightness.
+    Normalised exponential average: early in a movie it's the plain average of what's been seen,
+    later it's dominated by roughly the last `tau` seconds."""
+    def __init__(self):
+        self.state = {}       # lamp id → [sum_r, sum_g, sum_b, sum_bri, weight, last_update]
+        self.sent = {}        # lamp id → (x, y, bri) last sent
+
+    def reset(self):
+        self.state.clear(); self.sent.clear()
+
+    def update(self, lid, rgb, bri, sensitivity, now):
+        tau = ambient_tau(sensitivity)
+        st = self.state.get(lid)
+        if st is None or tau <= 0:
+            self.state[lid] = [*rgb, bri, 1.0, now]
+            return rgb, bri
+        decay = math.exp(-(now - st[5]) / tau)
+        for i, v in enumerate((*rgb, bri)):
+            st[i] = st[i] * decay + v
+        st[4] = st[4] * decay + 1.0
+        st[5] = now
+        return tuple(v / st[4] for v in st[:3]), st[3] / st[4]
+
+    def changed(self, lid, x, y, bri):
+        prev = self.sent.get(lid)
+        if prev and abs(prev[0] - x) < 0.002 and abs(prev[1] - y) < 0.002 and abs(prev[2] - bri) < 0.5:
+            return False
+        self.sent[lid] = (x, y, bri)
+        return True
 
 
 # ---------------------------------------------------------------- main loop
@@ -245,13 +300,17 @@ def run(cfg):
     hue = Hue(cfg["hue"]["host"], cfg["secrets"]["HUE_KEY"])
     strip = hue.resolve(cfg["hue"]["strip"])
     strip_is_gradient = "gradient" in hue.get(strip)
-    lamps = [(hue.resolve(l["light"]), l.get("side", "center"), float(l.get("factor", s["lamp_factor"])))
+    lamps = [(hue.resolve(l["light"]), l.get("side", "center"), float(l.get("factor", s["lamp_factor"])),
+              l.get("sensitivity"))
              for l in cfg["hue"]["lamps"]]
+    ambient, sens, movie = Ambient(), float(s["ambient_sensitivity"]), None
+    sens_entity = cfg["home_assistant"]["ambient_sensitivity_entity"]
     plex = Plex(cfg["plex"], cfg["secrets"]["PLEX_TOKEN"])
     ha = HomeAssistant(cfg["home_assistant"], cfg["secrets"]["HA_TOKEN"]) \
         if cfg["home_assistant"]["url"] and cfg["secrets"]["HA_TOKEN"] else None
     log(f"movie-glow started: strip {cfg['hue']['strip']!r}{' (gradient)' if strip_is_gradient else ''}, "
-        f"{len(lamps)} lamp(s), Home Assistant {'on' if ha else 'off'}, after={cfg['after']['mode']}")
+        f"{len(lamps)} lamp(s), Home Assistant {'on' if ha else 'off'}, after={cfg['after']['mode']}, "
+        f"ambient sensitivity {sens:g}{' (from ' + sens_entity + ')' if ha and sens_entity else ''}")
 
     active, snap, bri_s, tick, status, sess, last_poll = False, {}, None, 0, None, None, 0
 
@@ -274,6 +333,14 @@ def run(cfg):
                 sess = plex.session() if enabled else None
                 want = bool(sess) and sess["state"] in ("playing", "buffering")
                 ha_pos = ha.position() if (ha and want) else None
+                if ha and sens_entity and want:
+                    v = ha.number(sens_entity)
+                    if v is not None and v != sens:
+                        log(f"ambient sensitivity {sens:g} → {v:g}")
+                        sens = v
+                if sess and sess["file"] != movie:          # new movie: start the averages fresh
+                    movie = sess["file"]
+                    ambient.reset()
                 if ha_pos and ha_pos[0] == "paused":
                     want = False
                 new_status = f"syncing {sess['title']}" if want else \
@@ -298,7 +365,7 @@ def run(cfg):
                 + (time.time() - last_poll) + s["lead"]
             img = grab(sess["file"], pos, sess["hdr"])
             if img:
-                pts, bri, sides = analyse(img, s, cfg["hue"]["reverse"])
+                pts, bri, sides, raw = analyse(img, s, cfg["hue"]["reverse"])
                 bri_s = bri if bri_s is None else bri_s * 0.4 + bri * 0.6
                 body = {"on": {"on": True}, "dimming": {"brightness": round(bri_s, 1)},
                         "dynamics": {"duration": s["fade_ms"]}}
@@ -309,11 +376,18 @@ def run(cfg):
                     body["color"] = {"xy": {"x": x, "y": y}}
                 hue.put(strip, body)
                 tick += 1
-                if lamps and tick % 2 == 1:        # lamps every other update: gentler on the room + bridge
-                    for lid, side, factor in lamps:
-                        x, y = sides.get(side, sides["center"])
-                        hue.put(lid, {"on": {"on": True}, "dimming": {"brightness": round(max(1.0, bri_s * factor), 1)},
-                                      "color": {"xy": {"x": x, "y": y}}, "dynamics": {"duration": s["lamp_fade_ms"]}})
+                now = time.time()
+                for lid, side, factor, lamp_sens in lamps:
+                    # every frame feeds the average; at sensitivity 100 this is just the current frame
+                    rgb, lbri = ambient.update(lid, raw.get(side, raw["center"]), bri,
+                                               lamp_sens if lamp_sens is not None else sens, now)
+                    if tick % 2 == 1:              # lamps every other update: gentler on the room + bridge
+                        x, y = to_xy(rgb, s["saturation"])
+                        b = round(max(1.0, lbri * factor), 1)
+                        if ambient.changed(lid, x, y, b) or tick % 20 == 1:
+                            hue.put(lid, {"on": {"on": True}, "dimming": {"brightness": b},
+                                          "color": {"xy": {"x": x, "y": y}},
+                                          "dynamics": {"duration": s["lamp_fade_ms"]}})
         except Exception as e:
             log("error:", type(e).__name__, str(e)[:200])
             time.sleep(5)
@@ -374,7 +448,7 @@ if __name__ == "__main__":
         img = grab(args[1], float(args[2]), "--hdr" in args)
         if not img:
             raise SystemExit("could not read a frame")
-        pts, bri, sides = analyse(img, DEFAULTS["sync"], False)
+        pts, bri, sides, _ = analyse(img, DEFAULTS["sync"], False)
         print(json.dumps({"gradient_points": pts, "brightness": round(bri, 1), "sides": sides}, indent=1))
     elif not args:
         run(load_config())

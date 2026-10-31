@@ -1,0 +1,50 @@
+# movie-glow configuration. Copy to config.toml and edit.
+# Secrets (PLEX_TOKEN, HUE_KEY, HA_TOKEN) go in .env, not here.
+
+[plex]
+url = "http://192.168.1.10:32400"
+# Which Plex player to follow: part of its name, product or device ("Apple TV", "Living Room", "SHIELD").
+# Leave empty to follow whichever movie is playing.
+player = "Living Room"
+# Plex reports file paths as Plex sees them. If movie-glow sees the files at a different path,
+# map the start of the path: [ "path in Plex", "path for movie-glow" ].
+path_map = [
+  ["/data/movies/", "/media/movies/"],
+  ["/data/tv/", "/media/tv/"],
+]
+
+[hue]
+host = "192.168.1.20"          # Hue bridge IP (or set HUE_HOST)
+strip = "TV Lightstrip"        # name or id of the light behind the TV (run --lights). Gradient strips get 5 zones.
+reverse = false                # set true if the colours appear mirrored
+
+# Optional lamps that follow one side of the picture, dimmer than the strip.
+# [[hue.lamps]]
+# light = "Left floor lamp"
+# side = "left"                # left | right | center
+# factor = 0.35                # brightness relative to the strip
+
+[sync]
+interval = 1.5                 # seconds between updates
+lead = 1.0                     # read slightly ahead to cover processing + bridge latency
+fade_ms = 1200                 # strip fade per update
+lamp_fade_ms = 2500            # lamps fade more slowly
+brightness_min = 25            # % in dark scenes
+brightness_max = 80            # % in bright scenes
+saturation = 1.35              # colour boost (averaging washes colours out)
+
+[after]
+# What the lights do when the movie pauses/stops (or the switch turns off):
+#   fixed   -> white at `brightness` % and `kelvin`
+#   restore -> back to how they were before syncing started
+#   leave   -> do nothing
+mode = "fixed"
+brightness = 75
+kelvin = 4000
+
+# Optional Home Assistant integration: an on/off switch and a more precise playback position.
+[home_assistant]
+url = ""                       # e.g. "http://192.168.1.5:8123"; empty = not used
+switch = ""                    # e.g. "input_boolean.movie_light_sync"; empty = always on
+media_player = ""              # e.g. "media_player.apple_tv" (for a more precise position)
+lamps_yield_on_pause_to = ""   # e.g. "input_boolean.movie_mode": if on while paused, lamps are left alone

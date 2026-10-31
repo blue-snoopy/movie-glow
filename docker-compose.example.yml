@@ -1,0 +1,13 @@
+services:
+  movie-glow:
+    build: .
+    container_name: movie-glow
+    network_mode: host               # simplest way to reach Plex, the Hue bridge and Home Assistant on your LAN
+    env_file: .env
+    environment:
+      - TZ=America/New_York
+    volumes:
+      - ./config.toml:/config/config.toml:ro
+      - /path/to/your/media:/media:ro  # the same files Plex plays (see [plex] path_map)
+    mem_limit: 768m                  # decoding a 4K frame needs a few hundred MB
+    restart: unless-stopped

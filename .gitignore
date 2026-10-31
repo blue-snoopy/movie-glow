@@ -1,0 +1,4 @@
+config.toml
+.env
+docker-compose.yml
+__pycache__/

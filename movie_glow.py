@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""movie-glow: free "Ambilight" for Plex + Philips Hue.
+"""movie-glow: free screen-matched ambient lighting for Plex and Philips Hue.
 
 While a movie plays in Plex, movie-glow reads the frame at the current playback position
 straight from the movie file (ffmpeg, a tiny 32x18 image, HDR tone-mapped), averages zones

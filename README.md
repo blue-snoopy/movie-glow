@@ -1,6 +1,6 @@
 # movie-glow
 
-**Free "Ambilight" for Plex + Philips Hue.** Your Hue lightstrip behind the TV follows the colours of the movie you're watching in Plex: no HDMI sync box, no TV app, no capture card.
+**Free screen-matched ambient lighting for Plex and Philips Hue.** Your Hue lightstrip behind the TV follows the colours of the movie you're watching in Plex: no HDMI sync box, no TV app, no capture card.
 
 ## How it works
 
@@ -103,4 +103,10 @@ Brightness is averaged the same way. A new movie starts the average fresh.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
+
+## Disclaimer
+
+movie-glow is an independent, unofficial project. It is not affiliated with, endorsed by or sponsored by
+Plex, Inc. or Signify (Philips Hue). Plex and Philips Hue are trademarks of their respective owners and are
+used here only to describe what this software works with.
